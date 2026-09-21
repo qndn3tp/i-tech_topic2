@@ -27,7 +27,7 @@ def main():
     #searchValidCameraIndexes()
     
     # Initialize the webcam capture
-    cap = cv2.VideoCapture(0)  # Use the default camera (0) or change to a different index if multiple cameras are connected to system
+    cap = cv2.VideoCapture(1)  # Use camera index 1; change this if a different camera is connected
 
     # Main loop to process video frames
     while cap.isOpened():
