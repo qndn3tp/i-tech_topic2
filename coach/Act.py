@@ -129,7 +129,7 @@ class Act:
         # Wait for 1 ms and check if the window should be closed
         cv2.waitKey(1)
 
-    def provide_feedback(self, decision, frame, joints, elbow_angle_mvg):
+    def provide_feedback(self, decision, frame, joints, elbow_angle_mvg, hand_results, folded_fingers):
         """
         Displays the skeleton and some text using open cve.
 
@@ -142,6 +142,15 @@ class Act:
 
         mp.solutions.drawing_utils.draw_landmarks(frame, joints.pose_landmarks, mp.solutions.pose.POSE_CONNECTIONS)
 
+        if hand_results and hand_results.multi_hand_landmarks:
+            # Draw the detected hand skeletons on the same camera frame.
+            for hand_landmarks in hand_results.multi_hand_landmarks:
+                mp.solutions.drawing_utils.draw_landmarks(
+                    frame,
+                    hand_landmarks,
+                    mp.solutions.hands.HAND_CONNECTIONS,
+                )
+
         # Define the number and text to display
         number = elbow_angle_mvg
         text = " "
@@ -150,18 +159,30 @@ class Act:
         elif decision == 'extension':
             text = "You are extending your elbow! %s" % number
 
-
-        # Set the position, font, size, color, and thickness for the text
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = .9
-        font_color = (0, 0, 0)  # White color in BGR
-        thickness = 2
-
-        # Define the position for the number and text
-        text_position = (50, 50)
-
         # Draw the text on the image
-        cv2.putText(frame, text, text_position, font, font_scale, font_color, thickness)
+        if folded_fingers:
+            # Show one line for each detected hand and its folded fingers.
+            for index, folded in enumerate(folded_fingers):
+                cv2.putText(
+                    frame,
+                    f'Folded: {folded}',
+                    (50, 85 + index * 30),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1,
+                    (255, 255, 255),
+                    2,
+                )
+        else:
+            # Ask the user to place a hand in view when no hand is detected.
+            cv2.putText(
+                frame,
+                "Please face your palm toward the camera.",
+                (50, 50),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,
+                (255, 255, 255),
+                2,                            
+            )
 
         # Display the frame (for debugging purposes)
         cv2.imshow('Sport Coaching Program', frame)

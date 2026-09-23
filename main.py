@@ -38,9 +38,25 @@ def main():
             print("Failed to grab frame")
             break
 
+        # Correct the mirrored webcam view so left and right match the user.
+        frame = cv2.flip(frame, 1)
+
         # Sense: Detect joints
         joints = sense.detect_joints(frame)
-        landmarks = joints.pose_landmarks
+        landmarks = joints.pose_landmarks 
+
+        # Sense: Detect hands and collect the folded fingers for each visible hand.
+        hands = sense.detect_hands(frame)
+        folded_fingers = []
+        if hands.multi_hand_landmarks:
+            for hand_landmarks, hand_classification in zip(
+                hands.multi_hand_landmarks,
+                hands.multi_handedness,
+            ):
+                handedness = hand_classification.classification[0].label
+                folded = sense.get_folded_fingers(hand_landmarks, handedness)
+                folded_fingers.append(f'{handedness}: {", ".join(folded) or "none"}')
+                print(f'{handedness} hand folded fingers: {folded or "none"}')
 
         # If landmarks are detected, calculate the elbow angle
         if landmarks:
@@ -61,8 +77,15 @@ def main():
 
             decision = think.state
 
-            # Act: Provide feedback to the user.
-            act.provide_feedback(decision, frame=frame, joints=joints, elbow_angle_mvg=elbow_angle_mvg)
+            # Act:Draw pose, hand landmarks, movement status, and finger feedback.
+            act.provide_feedback(
+                decision,
+                frame=frame,
+                joints=joints,
+                elbow_angle_mvg=elbow_angle_mvg,
+                hand_results=hands,
+                folded_fingers=folded_fingers,
+            )
             # Render the balloon visualization
             act.visualize_balloon()
 
