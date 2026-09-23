@@ -16,7 +16,7 @@ class Sense:
         return results if results else None
 
     def get_folded_fingers(self, hand_landmarks, handedness):
-        # Return the names of fingers that are currently folded.
+        # Return folded fingers for either the left or right hand.
         landmarks = hand_landmarks.landmark
         folded_fingers = []
 

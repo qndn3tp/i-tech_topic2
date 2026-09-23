@@ -129,27 +129,27 @@ class Act:
         # Wait for 1 ms and check if the window should be closed
         cv2.waitKey(1)
 
-    def provide_feedback(self, frame, hand_results, folded_fingers,
-                         target_finger, score):
+    def provide_feedback(self, frame, hand_results, folded_fingers_by_hand,
+                         target_hand, target_finger, score):
         """
-        Displays the detected right hand and finger coaching text.
+        Displays both detected hands and the current finger coaching text.
 
         :param frame: The currently processed frame form the webcam.
         :param hand_results: The detected hand landmarks.
-        :param folded_fingers: The folded fingers detected on the right hand.
+        :param folded_fingers_by_hand: Folded fingers detected for each hand.
+        :param target_hand: The hand currently requested by Think.
         :param target_finger: The finger currently requested by Think.
         :param score: The current finger-folding score.
 
         """
 
         if hand_results and hand_results.multi_hand_landmarks:
-            # Draw the detected hand skeletons on the same camera frame.
+            # Draw every detected hand so both left- and right-hand commands
+            # can be followed visually.
             for hand_landmarks, hand_classification in zip(
                 hand_results.multi_hand_landmarks,
                 hand_results.multi_handedness,
             ):
-                if hand_classification.classification[0].label != 'Right':
-                    continue
                 mp.solutions.drawing_utils.draw_landmarks(
                     frame,
                     hand_landmarks,
@@ -159,7 +159,7 @@ class Act:
         # Draw the text on the image
         cv2.putText(
             frame,
-            f'Fold your right {target_finger}!  Score: {score}',
+            f'Fold your {target_hand.lower()} {target_finger}!  Score: {score}',
             (50, 40),
             cv2.FONT_HERSHEY_SIMPLEX,
             1,
@@ -167,12 +167,17 @@ class Act:
             2,
         )
 
-        if folded_fingers:
-            # Show one line for each detected hand and its folded fingers.
-            for index, folded in enumerate(folded_fingers):
+        # Show the folded-finger list for each hand independently.
+        has_folded_fingers = any(folded_fingers_by_hand.values())
+        if has_folded_fingers:
+            for index, (hand, folded_fingers) in enumerate(
+                folded_fingers_by_hand.items()
+            ):
+                if not folded_fingers:
+                    continue
                 cv2.putText(
                     frame,
-                    f'Folded: {folded}',
+                    f'{hand}: Folded {", ".join(folded_fingers)}',
                     (50, 80 + index * 30),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     1,

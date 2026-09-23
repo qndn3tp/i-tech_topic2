@@ -38,10 +38,10 @@ def main():
         # Correct the mirrored webcam view so left and right match the user.
         frame = cv2.flip(frame, 1)
 
-        # Sense: Detect hands and collect the folded fingers for each visible hand.
+        # Sense: Store folded fingers separately so the same finger name on each hand
+        # can be evaluated as a different command.
         hands = sense.detect_hands(frame)
-        folded_fingers = []
-        right_hand_folded_fingers = []
+        folded_fingers_by_hand = {'Right': [], 'Left': []}
         if hands and hands.multi_hand_landmarks:
             for hand_landmarks, hand_classification in zip(
                 hands.multi_hand_landmarks,
@@ -49,17 +49,19 @@ def main():
             ):
                 handedness = hand_classification.classification[0].label
                 folded = sense.get_folded_fingers(hand_landmarks, handedness)
-                if handedness == 'Right':
-                    right_hand_folded_fingers = folded
-                    folded_fingers = folded
-                    print(f'Right hand folded fingers: {folded or "none"}')
+                # Keep only the two hand labels supported by the command system.
+                if handedness in folded_fingers_by_hand:
+                    folded_fingers_by_hand[handedness] = folded
+                    print(f'{handedness} hand folded fingers: {folded or "none"}')
 
-        think.update_finger_state(right_hand_folded_fingers)
+            # Think checks the requested hand and finger, then updates the score.
+        think.update_finger_state(folded_fingers_by_hand)
 
         act.provide_feedback(
             frame=frame,
             hand_results=hands,
-            folded_fingers=folded_fingers,
+            folded_fingers_by_hand=folded_fingers_by_hand,
+            target_hand=think.target_hand,
             target_finger=think.target_finger,
             score=think.score,
         )
