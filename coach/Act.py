@@ -1,7 +1,7 @@
 # Act Component: Provide feedback to the user
 
-import mediapipe as mp
 import cv2
+import mediapipe as mp
 import numpy as np
 import random
 import pyttsx3
@@ -114,7 +114,7 @@ class Act:
             if self.explosion_frame_count >= self.explosion_duration:
                 self.reset_balloon()
 
-        cv2.putText(img, f'Repeat flexing/bending your left arm to pop the balloon!', (0, 50),
+        cv2.putText(img, f'Fold the commanded finger to pop the balloon!', (0, 50),
                     cv2.FONT_HERSHEY_SIMPLEX, .55, (255, 255, 255), 2, cv2.LINE_AA)
 
         # Add transition count and text
@@ -124,49 +124,56 @@ class Act:
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
 
         # Show the image in the window
-        cv2.imshow('Flex and bend your left elbow!', img)
+        cv2.imshow('Finger Coaching', img)
 
         # Wait for 1 ms and check if the window should be closed
         cv2.waitKey(1)
 
-    def provide_feedback(self, decision, frame, joints, elbow_angle_mvg, hand_results, folded_fingers):
+    def provide_feedback(self, frame, hand_results, folded_fingers,
+                         target_finger, score):
         """
-        Displays the skeleton and some text using open cve.
+        Displays the detected right hand and finger coaching text.
 
-        :param decision: The decision in which state the user is from the think component.
         :param frame: The currently processed frame form the webcam.
-        :param joints: The joints extracted from mediapipe from the current frame.
-        :param elbow_angle_mvg: The moving average from the left elbow angle.
+        :param hand_results: The detected hand landmarks.
+        :param folded_fingers: The folded fingers detected on the right hand.
+        :param target_finger: The finger currently requested by Think.
+        :param score: The current finger-folding score.
 
         """
-
-        mp.solutions.drawing_utils.draw_landmarks(frame, joints.pose_landmarks, mp.solutions.pose.POSE_CONNECTIONS)
 
         if hand_results and hand_results.multi_hand_landmarks:
             # Draw the detected hand skeletons on the same camera frame.
-            for hand_landmarks in hand_results.multi_hand_landmarks:
+            for hand_landmarks, hand_classification in zip(
+                hand_results.multi_hand_landmarks,
+                hand_results.multi_handedness,
+            ):
+                if hand_classification.classification[0].label != 'Right':
+                    continue
                 mp.solutions.drawing_utils.draw_landmarks(
                     frame,
                     hand_landmarks,
                     mp.solutions.hands.HAND_CONNECTIONS,
                 )
 
-        # Define the number and text to display
-        number = elbow_angle_mvg
-        text = " "
-        if decision == 'flexion':
-            text = "You are flexing your elbow! %s" % number
-        elif decision == 'extension':
-            text = "You are extending your elbow! %s" % number
-
         # Draw the text on the image
+        cv2.putText(
+            frame,
+            f'Fold your right {target_finger}!  Score: {score}',
+            (50, 40),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1,
+            (255, 255, 255),
+            2,
+        )
+
         if folded_fingers:
             # Show one line for each detected hand and its folded fingers.
             for index, folded in enumerate(folded_fingers):
                 cv2.putText(
                     frame,
                     f'Folded: {folded}',
-                    (50, 85 + index * 30),
+                    (50, 80 + index * 30),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     1,
                     (255, 255, 255),
@@ -177,7 +184,7 @@ class Act:
             cv2.putText(
                 frame,
                 "Please face your palm toward the camera.",
-                (50, 50),
+                (50, 80),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 1,
                 (255, 255, 255),

@@ -1,10 +1,7 @@
 import cv2
-import mediapipe as mp
 from coach import Sense
 from coach import Think
 from coach import Act
-
-import numpy as np
 
 
 # Main Program Loop
@@ -41,55 +38,32 @@ def main():
         # Correct the mirrored webcam view so left and right match the user.
         frame = cv2.flip(frame, 1)
 
-        # Sense: Detect joints
-        joints = sense.detect_joints(frame)
-        landmarks = joints.pose_landmarks 
-
         # Sense: Detect hands and collect the folded fingers for each visible hand.
         hands = sense.detect_hands(frame)
         folded_fingers = []
-        if hands.multi_hand_landmarks:
+        right_hand_folded_fingers = []
+        if hands and hands.multi_hand_landmarks:
             for hand_landmarks, hand_classification in zip(
                 hands.multi_hand_landmarks,
                 hands.multi_handedness,
             ):
                 handedness = hand_classification.classification[0].label
                 folded = sense.get_folded_fingers(hand_landmarks, handedness)
-                folded_fingers.append(f'{handedness}: {", ".join(folded) or "none"}')
-                print(f'{handedness} hand folded fingers: {folded or "none"}')
+                if handedness == 'Right':
+                    right_hand_folded_fingers = folded
+                    folded_fingers = folded
+                    print(f'Right hand folded fingers: {folded or "none"}')
 
-        # If landmarks are detected, calculate the elbow angle
-        if landmarks:
-            # Extract joint coordinates for the left arm
-            # For this example, we will use specific landmark indexes for shoulder, elbow, and wrist
-            shoulder = sense.extract_joint_coordinates(landmarks, 'left_shoulder')
-            elbow = sense.extract_joint_coordinates(landmarks, 'left_elbow')
-            wrist = sense.extract_joint_coordinates(landmarks, 'left_wrist')
+        think.update_finger_state(right_hand_folded_fingers)
 
-            # Calculate the elbow angle
-            elbow_angle_mvg = sense.calculate_angle(shoulder, elbow, wrist)
-
-            # Think: Next, give the angles to the decision-making component and make decisions based on joint data
-            think.update_state(elbow_angle_mvg, sense.previous_angle)
-
-            # We'll save the previous angle for later comparison
-            sense.previous_angle = elbow_angle_mvg
-
-            decision = think.state
-
-            # Act:Draw pose, hand landmarks, movement status, and finger feedback.
-            act.provide_feedback(
-                decision,
-                frame=frame,
-                joints=joints,
-                elbow_angle_mvg=elbow_angle_mvg,
-                hand_results=hands,
-                folded_fingers=folded_fingers,
-            )
-            # Render the balloon visualization
-            act.visualize_balloon()
-
-            # think.check_for_timeout()
+        act.provide_feedback(
+            frame=frame,
+            hand_results=hands,
+            folded_fingers=folded_fingers,
+            target_finger=think.target_finger,
+            score=think.score,
+        )
+        act.visualize_balloon()
 
         # Exit if the 'q' key is pressed
         if cv2.waitKey(10) & 0xFF == ord('q'):
