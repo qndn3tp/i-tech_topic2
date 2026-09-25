@@ -1,200 +1,278 @@
-# Act Component: Provide feedback to the user
+# Act Component: renders each screen and provides audio feedback (TTS + tones). 
+# Kept separate from Think so the look/sound of the game can change
+# without touching the state machine or scoring.
+
+import queue
+import random
+import threading
 
 import cv2
 import mediapipe as mp
-import numpy as np
-import random
 import pyttsx3
 
+try:
+    import winsound
+    def _beep(freq, duration_ms):
+        winsound.Beep(freq, duration_ms)
+except ImportError:
+    def _beep(freq, duration_ms):
+        pass
 
-# Act Component: Visualization to motivate user, visualization such as the skeleton and debugging information.
-# Things to add: Other graphical visualization, a proper GUI, more verbal feedback
+
+WINDOW_NAME = "Finger & Speech Coach"
+CANVAS_SIZE = (500, 700, 3)  # height, width, channels
+
+WHITE = (255, 255, 255)
+GREEN = (0, 200, 0)
+RED = (0, 0, 255)
+YELLOW = (0, 220, 220)
+GREY = (120, 120, 120)
+
+TARGET_FINGER_LANDMARKS = {
+    "thumb": (
+        mp.solutions.hands.HandLandmark.THUMB_CMC,
+        mp.solutions.hands.HandLandmark.THUMB_MCP,
+        mp.solutions.hands.HandLandmark.THUMB_IP,
+        mp.solutions.hands.HandLandmark.THUMB_TIP,
+    ),
+    "index": (
+        mp.solutions.hands.HandLandmark.INDEX_FINGER_MCP,
+        mp.solutions.hands.HandLandmark.INDEX_FINGER_PIP,
+        mp.solutions.hands.HandLandmark.INDEX_FINGER_DIP,
+        mp.solutions.hands.HandLandmark.INDEX_FINGER_TIP,
+    ),
+    "middle": (
+        mp.solutions.hands.HandLandmark.MIDDLE_FINGER_MCP,
+        mp.solutions.hands.HandLandmark.MIDDLE_FINGER_PIP,
+        mp.solutions.hands.HandLandmark.MIDDLE_FINGER_DIP,
+        mp.solutions.hands.HandLandmark.MIDDLE_FINGER_TIP,
+    ),
+    "ring": (
+        mp.solutions.hands.HandLandmark.RING_FINGER_MCP,
+        mp.solutions.hands.HandLandmark.RING_FINGER_PIP,
+        mp.solutions.hands.HandLandmark.RING_FINGER_DIP,
+        mp.solutions.hands.HandLandmark.RING_FINGER_TIP,
+    ),
+    "pinky": (
+        mp.solutions.hands.HandLandmark.PINKY_MCP,
+        mp.solutions.hands.HandLandmark.PINKY_PIP,
+        mp.solutions.hands.HandLandmark.PINKY_DIP,
+        mp.solutions.hands.HandLandmark.PINKY_TIP,
+    ),
+}
+
+# Spoken after a correct command.
+SUCCESS_PHRASES = [
+    "Great job!",
+    "You're doing amazing!",
+    "Keep it up!",
+    "Nice work!",
+    "That's the way!",
+    "Excellent!",
+    "Well done!",
+    "You're on a roll!",
+]
+
+# Spoken after a missed/incorrect/timed-out command - keeps morale up
+ENCOURAGEMENT_PHRASES = [
+    "Almost there, try again!",
+    "You can do it, keep going!",
+    "No worries, next one!",
+    "Stay with it, you're improving!",
+    "That's okay, let's try the next one!",
+    "Don't give up, you've got this!",
+]
+
+
 class Act:
-
     def __init__(self):
-        # Balloon size and transition tracking for visualization
-        self.balloon_size = 50
-        self.transition_count = 0
-        self.max_transitions = 10  # Explodes after 10 transitions
-        self.exploded = False  # Track whether the balloon exploded
-        self.explosion_fragments = []  # Store explosion fragments
-        self.explosion_frame_count = 0  # Frame counter for explosion duration
-        self.explosion_duration = 30  # Number of frames to show explosion effect
-        self.engine = pyttsx3.init()
+        # Speech runs on its own background thread, fed through a queue, so
+        # calling speak() never blocks the game loop (camera feed / timer
+        # bar keep updating while a line is being read aloud), and lines
+        # play one at a time in order instead of overlapping.
+        #
+        # IMPORTANT: the pyttsx3 engine is created ONCE, inside the worker
+        # thread, and reused for every queued line. Recreating a fresh
+        # engine per utterance (or creating it outside this thread) is what
+        # causes total silence / only-the-first-line-plays symptoms with
+        # pyttsx3's Windows SAPI5 driver - one persistent engine on one
+        # dedicated thread is the combination that actually stays reliable.
+        self._speech_queue = queue.Queue()
+        self._speech_thread = threading.Thread(target=self._speech_worker, daemon=True)
+        self._speech_thread.start()
 
-        self.motivating_utterances = ['keep on going', 'you are doing great. I see it', 'only a few left', 'that is awesome', 'you have almost finished the exercise']
-        # Handles balloon inflation and reset after explosion
+    def _speech_worker(self):
+        engine = pyttsx3.init()
+        while True:
+            text = self._speech_queue.get()
+            try:
+                engine.say(text)
+                engine.runAndWait()
+            except Exception as exc:
+                # Surface TTS errors in the console instead of failing silently.
+                print(f"[Act] speech error: {exc}")
+            finally:
+                self._speech_queue.task_done()
 
-    def handle_balloon_inflation(self):
-        """
-        Increases the size of the balloon with each successful repetition.
-        """
-        if not self.exploded:  # Only inflate if balloon hasn't exploded
+    def speak(self, text):
+        """Queues a line to be spoken; returns immediately (non-blocking)."""
+        self._speech_queue.put(text)
 
-            self.transition_count += 1
-            self.balloon_size += 10  # Inflate balloon by 10 units per transition
-
-            text = random.choice(self.motivating_utterances)
-            self.engine.say("%s %s" % (self.transition_count, text))
-            self.engine.runAndWait() # This is a blocking call. You need to run it in a thread.
-
-            # Check if balloon should explode
-
-            if self.transition_count >= self.max_transitions:
-                self.explode_balloon()
-
-    def explode_balloon(self):
-        """
-        Handles the visual effect of the balloon exploding.
-        """
-
-        self.exploded = True  # Mark the balloon as exploded
-        self.create_explosion_fragments()  # Generate the explosion fragments
-        self.engine.say("boooom booooom booom")
-        self.engine.runAndWait()
-
-    def reset_balloon(self):
-        """
-        Resets the balloon after it explodes.
-        """
-
-        self.transition_count = 0
-        self.balloon_size = 50  # Reset balloon size
-        self.exploded = False  # Reset explosion state
-        self.explosion_frame_count = 0  # Reset the explosion frame counter
-        self.explosion_fragments.clear()  # Clear the fragments after explosion
-
-        self.engine.say("You did great! Let's reset the balloon.")
-        self.engine.runAndWait()
-        # Create explosion fragments with random sizes and positions
-
-    def create_explosion_fragments(self):
-        # Generate random "fragments" for explosion effect
-        for _ in range(20):
-            fragment = {
-                'position': (random.randint(200, 300), random.randint(200, 400)),
-                'size': random.randint(5, 15),
-                'color': (0, 0, 255),  # Red fragments
-                'dx': random.randint(-10, 10),  # X-direction movement
-                'dy': random.randint(-10, 10)  # Y-direction movement
-            }
-            self.explosion_fragments.append(fragment)
-
-        # Visualization of the balloon and explosion in OpenCV
-
-    def visualize_balloon(self):
-        """
-        Renders the balloon .
-        """
-
-        # Create a black background
-        img = np.zeros((500, 500, 3), dtype=np.uint8)
-
-        if not self.exploded:
-            # Draw the balloon (a circle) with dynamic size if it hasn't exploded
-            cv2.circle(img, (250, 300), self.balloon_size, (0, 0, 255), -1)  # Red balloon
+    def play_result_tone(self, success):
+        if success:
+            _beep(1000, 150)  # positive tone
         else:
-            # Draw explosion fragments if balloon has exploded
-            for fragment in self.explosion_fragments:
-                x, y = fragment['position']
-                size = fragment['size']
-                color = fragment['color']
+            _beep(300, 300)   # negative tone
 
-                # Move fragments in random directions
-                x += fragment['dx']
-                y += fragment['dy']
-                fragment['position'] = (x, y)
+    def give_feedback(self, success):
+        """Called once per finished command: plays the correct/wrong tone
+        AND speaks an encouraging line, so every challenge - win or lose -
+        ends with some motivation."""
+        self.play_result_tone(success)
+        phrase = random.choice(SUCCESS_PHRASES if success else ENCOURAGEMENT_PHRASES)
+        self.speak(phrase)
 
-                # Draw each fragment as a small circle
-                cv2.circle(img, (x, y), size, color, -1)
+    def render_start(self):
+        """Start page: title + 'press SPACE to begin' prompt."""
+        img = _blank_canvas()
+        _put_text(img, "Finger & Speech Coach", (45, 130),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.3, WHITE, 3, cv2.LINE_AA)
+        _put_text(img, "Curl the finger you're told,", (45, 205),
+              cv2.FONT_HERSHEY_SIMPLEX, 0.7, GREY, 2, cv2.LINE_AA)
+        _put_text(img, "or say the word shown.", (45, 245),
+              cv2.FONT_HERSHEY_SIMPLEX, 0.7, GREY, 2, cv2.LINE_AA)
+        _put_text(img, "10 commands per level", (45, 305),
+              cv2.FONT_HERSHEY_SIMPLEX, 0.7, GREY, 2, cv2.LINE_AA)
+        _put_text(img, "Press SPACE to start", (45, 390),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, YELLOW, 2, cv2.LINE_AA)
+        _show(img)
 
-            self.explosion_frame_count += 1
-
-            # Reset the balloon after the explosion effect finishes
-            if self.explosion_frame_count >= self.explosion_duration:
-                self.reset_balloon()
-
-        cv2.putText(img, f'Fold the commanded finger to pop the balloon!', (0, 50),
-                    cv2.FONT_HERSHEY_SIMPLEX, .55, (255, 255, 255), 2, cv2.LINE_AA)
-
-        # Add transition count and text
-        cv2.putText(img, f'Repetitions: {self.transition_count}', (150, 100),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
-        cv2.putText(img, f'Balloon Size: {self.balloon_size}', (150, 150),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
-
-        # Show the image in the window
-        cv2.imshow('Finger Coaching', img)
-
-        # Wait for 1 ms and check if the window should be closed
-        cv2.waitKey(1)
-
-    def provide_feedback(self, frame, hand_results, folded_fingers_by_hand,
-                         target_hand, target_finger, score):
+    def render_activity(self, frame, command, command_index, total_commands,
+                         score, time_left, time_limit, last_result=None,
+                         hand_results=None, speech_status=None,
+                         fold_accuracy=None):
         """
-        Displays both detected hands and the current finger coaching text.
-
-        :param frame: The currently processed frame form the webcam.
-        :param hand_results: The detected hand landmarks.
-        :param folded_fingers_by_hand: Folded fingers detected for each hand.
-        :param target_hand: The hand currently requested by Think.
-        :param target_finger: The finger currently requested by Think.
-        :param score: The current finger-folding score.
-
+        Activity page: current command, countdown bar, running score, and
+        (if a finger command) the camera feed with hand landmarks drawn on it.
         """
+        img = frame if frame is not None else _blank_canvas()
 
         if hand_results and hand_results.multi_hand_landmarks:
-            # Draw every detected hand so both left- and right-hand commands
-            # can be followed visually.
             for hand_landmarks, hand_classification in zip(
                 hand_results.multi_hand_landmarks,
                 hand_results.multi_handedness,
             ):
-                mp.solutions.drawing_utils.draw_landmarks(
-                    frame,
-                    hand_landmarks,
-                    mp.solutions.hands.HAND_CONNECTIONS,
-                )
+                detected_hand = hand_classification.classification[0].label
+                if (command.type.value == "finger"
+                        and detected_hand == command.hand):
+                    _draw_target_finger(img, hand_landmarks, command.finger)
 
-        # Draw the text on the image
-        cv2.putText(
-            frame,
-            f'Fold your {target_hand.lower()} {target_finger}!  Score: {score}',
-            (50, 40),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1,
-            (255, 255, 255),
-            2,
+        _put_text(img, command.prompt_text, (30, 55),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, WHITE, 2, cv2.LINE_AA)
+        _put_text(img, f"Command {command_index + 1} / {total_commands}",
+              (30, 115), cv2.FONT_HERSHEY_SIMPLEX, 0.7, GREY, 2, cv2.LINE_AA)
+        _put_text(img, f"Score: {score}", (30, 160),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, WHITE, 2, cv2.LINE_AA)
+
+        # Countdown bar - shrinks as time runs out, and the overall bar length
+        # reflects how tight the current time limit is (gets shorter each command).
+        bar_x, bar_y, bar_h = 30, 190, 18
+        bar_w_full = 300
+        fraction_left = max(0.0, min(1.0, time_left / time_limit))
+        cv2.rectangle(img, (bar_x, bar_y), (bar_x + bar_w_full, bar_y + bar_h), GREY, 2)
+        cv2.rectangle(
+            img, (bar_x, bar_y), (bar_x + int(bar_w_full * fraction_left), bar_y + bar_h),
+            YELLOW if fraction_left > 0.3 else RED, -1,
         )
 
-        # Show the folded-finger list for each hand independently.
-        has_folded_fingers = any(folded_fingers_by_hand.values())
-        if has_folded_fingers:
-            for index, (hand, folded_fingers) in enumerate(
-                folded_fingers_by_hand.items()
-            ):
-                if not folded_fingers:
-                    continue
-                cv2.putText(
-                    frame,
-                    f'{hand}: Folded {", ".join(folded_fingers)}',
-                    (50, 80 + index * 30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1,
-                    (255, 255, 255),
-                    2,
-                )
-        else:
-            # Ask the user to place a hand in view when no hand is detected.
-            cv2.putText(
-                frame,
-                "Please face your palm toward the camera.",
-                (50, 80),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1,
-                (255, 255, 255),
-                2,                            
-            )
+        if speech_status is not None:
+            _put_text(img, speech_status, (30, 245),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, YELLOW, 2, cv2.LINE_AA)
 
-        # Display the frame (for debugging purposes)
-        cv2.imshow('Sport Coaching Program', frame)
+        if fold_accuracy is not None:
+            if fold_accuracy >= 90:
+                feedback, feedback_color = "Perfect!", GREEN
+            elif fold_accuracy >= 60:
+                feedback, feedback_color = "Almost there, fold a little more.", YELLOW
+            else:
+                feedback, feedback_color = "Fold it more.", RED
+            _put_text(img, f"Fold accuracy: {fold_accuracy}%",
+                        (30, 295), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                        WHITE, 2, cv2.LINE_AA)
+            _put_text(img, feedback, (30, 340),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                        feedback_color, 2, cv2.LINE_AA)
+
+        if last_result is not None:
+            text, color = ("Correct!", GREEN) if last_result else ("Try again next time", RED)
+            _put_text(img, text, (30, 390 if fold_accuracy is not None else 295),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2, cv2.LINE_AA)
+
+        _show(img)
+
+    def render_level_complete(self, score, total_commands, hardest_items):
+        img = _blank_canvas()
+        _put_text(img, "Level complete!", (45, 120),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.3, WHITE, 3, cv2.LINE_AA)
+        _put_text(img, f"Score: {score} / {total_commands}", (45, 200),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, GREEN, 2, cv2.LINE_AA)
+
+        if hardest_items:
+            _put_text(img, "We'll practice these more", (45, 280),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, GREY, 2, cv2.LINE_AA)
+            _put_text(img, "next time:", (45, 320),
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.7, GREY, 2, cv2.LINE_AA)
+            for i, item in enumerate(hardest_items):
+                _put_text(img, f"- {item}", (65, 355 + i * 35),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, YELLOW, 2, cv2.LINE_AA)
+
+        _put_text(img, "Press SPACE to play again", (45, 455),
+                  cv2.FONT_HERSHEY_SIMPLEX, 0.7, WHITE, 2, cv2.LINE_AA)
+        _put_text(img, "or Q to quit", (45, 490),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, WHITE, 2, cv2.LINE_AA)
+        _show(img)
+
+
+def _blank_canvas():
+    import numpy as np
+    return np.zeros(CANVAS_SIZE, dtype="uint8")
+
+
+def _put_text(img, text, position, font, scale, color, thickness,
+              line_type=cv2.LINE_AA):
+    cv2.putText(
+        img, text, position, font, scale * 2, color, thickness, line_type
+    )
+
+
+def _draw_target_finger(img, hand_landmarks, finger_name):
+    landmark_ids = TARGET_FINGER_LANDMARKS.get(finger_name)
+    if landmark_ids is None:
+        return
+
+    height, width = img.shape[:2]
+    points = [
+        (
+            int(hand_landmarks.landmark[landmark_id].x * width),
+            int(hand_landmarks.landmark[landmark_id].y * height),
+        )
+        for landmark_id in landmark_ids
+    ]
+
+    for start, end in zip(points, points[1:]):
+        cv2.line(img, start, end, YELLOW, 4, cv2.LINE_AA)
+    for point in points:
+        cv2.circle(img, point, 7, RED, -1, cv2.LINE_AA)
+
+
+def _show(img):
+    if not hasattr(_show, "window_initialized"):
+        cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
+        cv2.setWindowProperty(
+            WINDOW_NAME,
+            cv2.WND_PROP_FULLSCREEN,
+            cv2.WINDOW_FULLSCREEN,
+        )
+        _show.window_initialized = True
+    cv2.imshow(WINDOW_NAME, img)
+    
